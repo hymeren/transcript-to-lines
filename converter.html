@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Transcript to Lines</title>
+<style>
+:root{--bg:#f2f4f7;--panel:#fff;--ink:#16202a;--mute:#5d6b79;--line:#d5dce3;--acc:#17797a;--acc-ink:#fff;--field:#fbfcfd}
+@media (prefers-color-scheme:dark){:root{--bg:#12161b;--panel:#1a2027;--ink:#e6ebf0;--mute:#93a1af;--line:#2d3640;--acc:#3fb6b4;--acc-ink:#07191a;--field:#151a20}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:900px;margin:0 auto;padding:28px 18px 80px}
+h1{font-size:1.6rem;margin:0 0 4px}
+h2{font-size:1.1rem;margin:0 0 10px}
+p.sub{margin:0 0 24px;color:var(--mute);max-width:65ch}
+section{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:18px;margin-bottom:18px}
+.row{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin:8px 0}
+textarea{width:100%;min-height:200px;resize:vertical;background:var(--field);color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:10px;font:13px/1.45 ui-monospace,Menlo,Consolas,monospace}
+button,label.btn{font:inherit;cursor:pointer;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:7px 13px}
+button:hover,label.btn:hover{border-color:var(--acc)}
+button.primary{background:var(--acc);color:var(--acc-ink);border-color:var(--acc);font-weight:600}
+button:disabled{opacity:.5;cursor:default}
+button:focus-visible,label.btn:focus-within,textarea:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+input[type=file]{position:absolute;opacity:0;width:1px;height:1px}
+.stat{color:var(--mute);font-size:.9rem}
+.drop{border:2px dashed var(--line);border-radius:8px;padding:18px;text-align:center;color:var(--mute)}
+.drop.over{border-color:var(--acc);color:var(--ink)}
+</style>
+</head>
+<body>
+<main>
+<h1>Transcript to Lines</h1>
+<p class="sub">Drop in a subtitle file or paste a transcript. You get one plain line per row, with timestamps and formatting tags removed. Copy it or download it as a text file.</p>
+
+<section>
+  <h2>1. Input</h2>
+  <div class="drop" id="drop">
+    <div class="row" style="justify-content:center">
+      <label class="btn">Choose file<input type="file" id="file" accept=".ass,.ssa,.srt,.vtt,.txt,text/plain"></label>
+    </div>
+    <div>or drag a file here. Supports .ass, .ssa, .srt, .vtt and .txt</div>
+  </div>
+  <p class="stat">Or paste the raw text:</p>
+  <textarea id="input" placeholder="Paste subtitle or transcript text here"></textarea>
+  <div class="row">
+    <label><input type="checkbox" id="stripHash" checked> Remove leading # from lines (chapter headings)</label>
+  </div>
+  <div class="row"><button class="primary" id="convert">Convert</button><button id="clear">Clear</button></div>
+</section>
+
+<section>
+  <h2>2. Lines</h2>
+  <div class="stat" id="stat">Nothing converted yet.</div>
+  <textarea id="output" readonly placeholder="Converted lines appear here"></textarea>
+  <div class="row">
+    <button class="primary" id="copy" disabled>Copy lines</button>
+    <button id="download" disabled>Download lines.txt</button>
+  </div>
+</section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+let fileName = "lines";
+
+function cleanText(t){
+  return t.replace(/\{[^}]*\}/g,"").replace(/<[^>]+>/g,"")
+          .replace(/\\[Nn]/g," ").replace(/\\h/g," ").replace(/\s+/g," ").trim();
+}
+
+function parseASS(text){
+  // Find the Text column from the Format line, fall back to the usual 10th field
+  let textIdx = 9;
+  const fmt = text.match(/^Format:\s*(Layer|Marked).*$/m);
+  if (fmt) {
+    const cols = fmt[0].replace(/^Format:\s*/,"").split(",").map(s => s.trim().toLowerCase());
+    const i = cols.indexOf("text");
+    if (i >= 0) textIdx = i;
+  }
+  const out = [];
+  for (const l of text.split(/\r?\n/)) {
+    if (!l.startsWith("Dialogue:")) continue;
+    const body = l.slice(9).trimStart();
+    const t = cleanText(body.split(",").slice(textIdx).join(","));
+    if (t) out.push(t);
+  }
+  return out;
+}
+
+function parseSRTorVTT(text){
+  const out = [];
+  let buf = [];
+  const flush = () => { if (buf.length) { const t = cleanText(buf.join(" ")); if (t) out.push(t); buf = []; } };
+  for (const raw of text.split(/\r?\n/)) {
+    const l = raw.trim();
+    if (!l) { flush(); continue; }
+    if (l === "WEBVTT" || /^(NOTE|STYLE|Kind:|Language:)/.test(l)) continue;
+    if (/-->/.test(l) || /^\d+$/.test(l)) continue;
+    buf.push(l);
+  }
+  flush();
+  return out;
+}
+
+function convert(){
+  const raw = $("input").value;
+  if (!raw.trim()) { $("stat").textContent = "Add a file or paste some text first."; return; }
+  let lines;
+  if (/^Dialogue:/m.test(raw)) lines = parseASS(raw);
+  else if (/-->/.test(raw)) lines = parseSRTorVTT(raw);
+  else lines = raw.split(/\r?\n/).map(cleanText).filter(Boolean);
+  if ($("stripHash").checked) lines = lines.map(l => l.replace(/^#+\s*/,"")).filter(Boolean);
+  $("output").value = lines.join("\n");
+  $("stat").textContent = lines.length + " lines";
+  $("copy").disabled = $("download").disabled = !lines.length;
+}
+
+function loadFile(f){
+  if (!f) return;
+  fileName = f.name.replace(/\.[^.]+$/,"") || "lines";
+  const r = new FileReader();
+  r.onload = () => { $("input").value = String(r.result); convert(); };
+  r.readAsText(f);
+}
+
+$("file").addEventListener("change", e => loadFile(e.target.files[0]));
+$("convert").onclick = convert;
+$("clear").onclick = () => { $("input").value = ""; $("output").value = ""; $("stat").textContent = "Nothing converted yet."; $("copy").disabled = $("download").disabled = true; fileName = "lines"; };
+
+const drop = $("drop");
+["dragenter","dragover"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add("over"); }));
+["dragleave","drop"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove("over"); }));
+drop.addEventListener("drop", e => loadFile(e.dataTransfer.files[0]));
+
+$("copy").onclick = async () => {
+  const t = $("output").value;
+  try { await navigator.clipboard.writeText(t); }
+  catch(e){ $("output").select(); document.execCommand("copy"); }
+  $("copy").textContent = "Copied";
+  setTimeout(() => $("copy").textContent = "Copy lines", 1500);
+};
+$("download").onclick = () => {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([$("output").value], {type:"text/plain"}));
+  a.download = fileName + "-lines.txt"; a.click();
+  URL.revokeObjectURL(a.href);
+};
+</script>
+</body>
+</html>
